@@ -66,6 +66,19 @@ Shepherd. Stages 1 and 3 intentionally do not exist.
 The HTTPS hostnames should be moved to this node only after the corresponding
 service reports healthy. Gitea's separate SSH endpoint is not handled by Caddy.
 
+Required public DNS records for the archive node at `31.56.26.15`:
+
+| Type | Hostname | Cloudflare proxy | Purpose |
+| --- | --- | --- | --- |
+| A | `download.anduinos.com` | Proxied | Download web service |
+| A | `git.aiursoft.com` | Proxied | Gitea web and Smart HTTP |
+| A | `videos.aiursoft.com` | Proxied | PeerTube web and media |
+| A | `gitea-ssh.aiursoft.com` | DNS only | Gitea SSH on TCP port 2201 |
+
+Cloudflare's ordinary HTTP proxy cannot carry Gitea's TCP/2201 SSH endpoint.
+Keep `gitea-ssh.aiursoft.com` DNS-only; Gitea advertises clone URLs in the form
+`ssh://git@gitea-ssh.aiursoft.com:2201/owner/repository.git`.
+
 ## Safety properties
 
 - The script fails if the current Swarm contains another node.
