@@ -1,0 +1,34 @@
+version: '3.9'
+
+services:
+  web:
+    image: pubhub.aiursoft.com/aiursoft/static:latest
+    entrypoint: ["sh", "-c", "/app/static --port 5000 --path /data --allow-directory-browsing"]
+    volumes:
+      - download-data:/data:ro
+    networks:
+      - proxy_app
+    stop_grace_period: 20s
+    deploy:
+      replicas: 3
+      labels:
+        shepherd.autoupdate: "true"
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+      update_config:
+        order: start-first
+        delay: 5s
+
+volumes:
+  download-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /swarm-vol/download-data
+
+networks:
+  proxy_app:
+    external: true

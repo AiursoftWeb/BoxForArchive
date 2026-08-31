@@ -1,0 +1,37 @@
+version: '3.9'
+
+services:
+  app:
+    image: pubhub.aiursoft.com/gitea/gitea:latest
+    volumes:
+      - gitea-data:/data
+    networks:
+      - proxy_app
+    ports:
+      - target: 2201
+        published: 2201
+        protocol: tcp
+        mode: host
+    stop_grace_period: 60s
+    deploy:
+      labels:
+        shepherd.autoupdate: "true"
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 8G
+      update_config:
+        order: stop-first
+        delay: 60s
+
+volumes:
+  gitea-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /swarm-vol/gitea-data
+
+networks:
+  proxy_app:
+    external: true

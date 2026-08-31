@@ -1,0 +1,5 @@
+.env
+.env.prod
+stage2/images/sites/Dist/
+stage2/images/sites/cloudflare_ips.conf
+stage2/images/sites/discovered/

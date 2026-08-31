@@ -1,0 +1,43 @@
+version: '3.9'
+
+services:
+  sites:
+    image: boxforarchive/archive-caddy:latest
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: host
+      - target: 443
+        published: 443
+        protocol: tcp
+        mode: host
+    environment:
+      CLOUDFLARE_API_TOKEN: "{{CLOUDFLARE_API_TOKEN}}"
+      ALLOW_INCOMING_IPS: "127.0.0.1"
+    volumes:
+      - sites-data:/data
+    networks:
+      - proxy_app
+    stop_grace_period: 60s
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+      update_config:
+        order: stop-first
+        delay: 60s
+
+volumes:
+  sites-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /swarm-vol/sites-data
+
+networks:
+  proxy_app:
+    external: true

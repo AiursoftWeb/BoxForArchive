@@ -1,0 +1,22 @@
+{
+	email anduin@aiursoft.com
+
+	acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN} {
+		resolver 1.1.1.1
+		propagation_timeout -1ns
+		propagation_delay 60s
+	}
+
+	servers :443 {
+		import cloudflare_trust
+
+		listener_wrappers {
+			http_redirect
+			tls
+		}
+	}
+}
+
+(hsts) {
+	header Strict-Transport-Security max-age=63072000
+}

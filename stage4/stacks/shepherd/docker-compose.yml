@@ -1,0 +1,26 @@
+version: '3.9'
+
+services:
+  app:
+    image: pubhub.aiursoft.com/containrrr/shepherd
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      TZ: UTC
+      FILTER_SERVICES: label=shepherd.autoupdate=true
+      WITH_REGISTRY_AUTH: "true"
+      REGISTRY_HOST: "{{REGISTRY_HOST}}"
+      REGISTRY_USER: "{{REGISTRY_USERNAME}}"
+      REGISTRY_PASSWORD: "{{REGISTRY_PASSWORD}}"
+    stop_grace_period: 60s
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+      update_config:
+        order: stop-first
+        delay: 60s

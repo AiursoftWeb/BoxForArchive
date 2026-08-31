@@ -1,0 +1,14 @@
+stages:
+  - lint
+
+lint-archive-box:
+  stage: lint
+  image: python:3.13
+  before_script:
+    - python3 -m pip install --disable-pip-version-check pyyaml
+  script:
+    - bash -n deploy.sh alldrop.sh stage2/images/sites/build_proxy.sh stage2/images/sites/fetch_cloudflare_ips.sh
+    - python3 ./lint.py
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
