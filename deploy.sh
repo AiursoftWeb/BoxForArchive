@@ -68,6 +68,58 @@ install_host_dependencies() {
     ok "Host dependencies are ready."
 }
 
+function setup_docker_auto_clean() {
+    echo "Configuring Docker cleanup every 23 hours..."
+    local temp_dir
+    local unit
+    local changed=0
+    temp_dir=$(mktemp -d)
+
+    # Keep the existing unit names so upgrades replace the old disk monitor.
+    cat > "$temp_dir/docker-disk-monitor.service" <<'EOF'
+[Unit]
+Description=Prune unused Docker data
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/systemctl is-active --quiet docker.service
+ExecStart=/usr/bin/docker system prune -a -f
+User=root
+EOF
+
+    cat > "$temp_dir/docker-disk-monitor.timer" <<'EOF'
+[Unit]
+Description=Prune unused Docker data every 23 hours
+
+[Timer]
+OnActiveSec=23h
+OnUnitActiveSec=23h
+Unit=docker-disk-monitor.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    for unit in docker-disk-monitor.service docker-disk-monitor.timer; do
+        if ! sudo cmp -s "$temp_dir/$unit" "/etc/systemd/system/$unit"; then
+            sudo install -m 0644 "$temp_dir/$unit" "/etc/systemd/system/$unit"
+            changed=1
+        fi
+    done
+    rm -rf "$temp_dir"
+    sudo rm -f /usr/local/bin/docker-disk-monitor.sh
+
+    if [ "$changed" -eq 1 ]; then
+        sudo systemctl daemon-reload
+        sudo systemctl enable docker-disk-monitor.timer
+        sudo systemctl restart docker-disk-monitor.timer
+    else
+        # Starting an already active timer leaves its schedule unchanged.
+        sudo systemctl enable --now docker-disk-monitor.timer
+    fi
+}
+
 ensure_independent_swarm() {
     local swarm_state
     swarm_state=$(sudo docker info --format '{{.Swarm.LocalNodeState}}')
@@ -231,6 +283,7 @@ deploy_business_stacks() {
 
 if [ "$TARGET_STAGE" -le 0 ]; then
     install_host_dependencies
+    setup_docker_auto_clean
 fi
 
 ensure_commands
