@@ -58,6 +58,24 @@ ensure_commands() {
     [ "${#missing[@]}" -eq 0 ] || fail "Missing commands: ${missing[*]}. Run ./deploy.sh --stage 0 first."
 }
 
+configure_docker_storage_dependency() {
+    local temp_file
+    local drop_in=/etc/systemd/system/docker.service.d/storage-mounts.conf
+    temp_file=$(mktemp)
+    cat > "$temp_file" <<'EOF'
+[Unit]
+RequiresMountsFor=/swarm-vol
+ConditionPathIsMountPoint=/swarm-vol
+EOF
+
+    sudo mkdir -p "$(dirname "$drop_in")"
+    if ! sudo cmp -s "$temp_file" "$drop_in"; then
+        sudo install -m 0644 "$temp_file" "$drop_in"
+        sudo systemctl daemon-reload
+    fi
+    rm -f "$temp_file"
+}
+
 install_host_dependencies() {
     info "Installing the minimal archive host dependencies..."
     sudo apt-get update
@@ -280,6 +298,8 @@ deploy_business_stacks() {
         deploy_stack "$compose_file" "$stack_name" always
     done
 }
+
+configure_docker_storage_dependency
 
 if [ "$TARGET_STAGE" -le 0 ]; then
     install_host_dependencies
