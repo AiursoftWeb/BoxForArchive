@@ -271,6 +271,9 @@ build_and_deploy_caddy() {
     info "Building the local archive Caddy image from PubHub base images..."
     sudo docker build --pull --tag boxforarchive/archive-caddy:latest "$image_dir"
     deploy_stack stage2/stacks/incoming/docker-compose.yml incoming never
+
+    # Rebuilt local tags leave the Swarm spec unchanged; recreate Caddy from the local image.
+    sudo docker service update --force --no-resolve-image incoming_sites
 }
 
 deploy_business_stacks() {
