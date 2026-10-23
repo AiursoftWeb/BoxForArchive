@@ -16,6 +16,7 @@ all_ranges="$ipv4_ranges $ipv6_ranges"
 cat > cloudflare_ips.conf <<EOF
 (cloudflare_trust) {
     trusted_proxies static $all_ranges private_ranges
+    trusted_proxies_strict
 }
 
 (limit_to_cloudflare) {
