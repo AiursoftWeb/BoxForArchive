@@ -94,11 +94,14 @@ def network_args(network):
 
 def detach_gateway():
     # Swarm recreates this sandbox asynchronously after Docker starts.
+    if gateway() is None:
+        return
+    expected = {'ingress-sbox'} if docker('info', '--format', '{{.Swarm.LocalNodeState}}') == 'active' else set()
     stable = 0
     def empty_gateway():
         nonlocal stable
         endpoints = set((gateway() or {}).get('Containers', {}))
-        stable = stable + 1 if endpoints <= {'ingress-sbox'} else 0
+        stable = stable + 1 if endpoints == expected else 0
         return stable >= 3
     wait_for(empty_gateway, 'Gateway still has workload endpoints')
     current = gateway()
@@ -121,6 +124,11 @@ def restore(transaction):
             docker('node', 'update', '--availability', 'drain', transaction['node'])
             wait_for(lambda: not docker('ps', '-q', '--filter', 'label=com.docker.swarm.service.id'),
                      'Swarm workloads did not stop for recovery')
+        current = gateway()
+        if current is None or not current.get('Containers'):
+            # A killed operation may have already detached the ingress sandbox.
+            run('systemctl', 'restart', 'docker.service')
+            start_docker(transaction)
         detach_gateway()
         if transaction['gateway']:
             docker('network', 'create', *network_args(transaction['gateway']), 'docker_gwbridge')
