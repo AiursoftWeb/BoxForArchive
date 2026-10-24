@@ -94,9 +94,12 @@ def network_args(network):
 
 def detach_gateway():
     # Swarm recreates this sandbox asynchronously after Docker starts.
-    if gateway() is None:
+    active = docker('info', '--format', '{{.Swarm.LocalNodeState}}') == 'active'
+    if active:
+        wait_for(lambda: gateway() is not None, 'Swarm did not recreate its gateway')
+    elif gateway() is None:
         return
-    expected = {'ingress-sbox'} if docker('info', '--format', '{{.Swarm.LocalNodeState}}') == 'active' else set()
+    expected = {'ingress-sbox'} if active else set()
     stable = 0
     def empty_gateway():
         nonlocal stable
@@ -140,28 +143,41 @@ def restore(transaction):
     print('Previous network and node availability restored.', flush=True)
 
 
-def available_bridge():
-    """Let Docker allocate a pool; validate host routes before using its gateway."""
-    name = 'box-bridge-allocation'
-    networks = inspect('network', *docker('network', 'ls', '-q').split())
-    previous = next((n for n in networks if n['Name'] == name), None)
-    if previous and ((previous.get('Labels') or {}).get('aiursoft.box.allocation') != 'default-bridge' or previous.get('Containers')):
-        raise RuntimeError('Bridge allocation name is already in use')
-    reserve = previous['Id'] if previous else docker(
-        'network', 'create', '--driver', 'bridge', '--label',
-        'aiursoft.box.allocation=default-bridge', name)
+def is_allocation(network):
+    return (network['Name'].startswith('box-bridge-allocation') and network['Driver'] == 'bridge' and
+            (network.get('Labels') or {}).get('aiursoft.box.allocation') == 'default-bridge')
+
+
+def available_bridge(networks):
+    """Allocate through Docker, checking both Swarm pools and host routes."""
+    label = 'aiursoft.box.allocation'
+    owned = [n for n in networks if is_allocation(n)]
+    blocked = [ipaddress.ip_network(p['Subnet']) for n in networks if n not in owned
+               for p in (n['IPAM'].get('Config') or []) if ':' not in p['Subnet']]
+    reserved = []
     try:
-        allocation = inspect('network', reserve)[0]['IPAM']['Config'][0]
-        pool = ipaddress.ip_network(allocation['Subnet'])
-        for route in json.loads(run('ip', '-j', '-4', 'route', 'show', 'table', 'all')):
-            destination = route.get('dst', 'default')
-            if destination == 'default' or route.get('dev') == f'br-{reserve[:12]}':
-                continue
-            if pool.overlaps(ipaddress.ip_network(destination, strict=False)):
-                raise RuntimeError('Docker-selected default bridge pool overlaps a host route')
-        return f"{allocation['Gateway']}/{pool.prefixlen}"
+        for attempt in range(32):
+            name = 'box-bridge-allocation' + (f'-{attempt}' if attempt else '')
+            previous = next((n for n in networks if n['Name'] == name), None)
+            if previous and (previous not in owned or previous['Driver'] != 'bridge' or previous.get('Containers')):
+                raise RuntimeError('Bridge allocation name is already in use')
+            reserve = previous['Id'] if previous else docker(
+                'network', 'create', '--driver', 'bridge', '--label', f'{label}=default-bridge',
+                '--opt', 'com.docker.network.bridge.inhibit_ipv4=true', name)
+            reserved.append(reserve)
+            allocation = inspect('network', reserve)[0]['IPAM']['Config'][0]
+            pool = ipaddress.ip_network(allocation['Subnet'])
+            temporary_devices = {f"br-{n['Id'][:12]}" for n in owned} | {f'br-{n[:12]}' for n in reserved}
+            routes = json.loads(run('ip', '-j', '-4', 'route', 'show', 'table', 'all'))
+            route_pools = [ipaddress.ip_network(r['dst'], strict=False) for r in routes
+                           if r.get('dst', 'default') != 'default' and r.get('dev') not in temporary_devices]
+            if not any(pool.overlaps(other) for other in blocked + route_pools):
+                return f"{allocation['Gateway']}/{pool.prefixlen}"
+            # Reserve rejected candidates until a compatible pool is selected.
+        raise RuntimeError('Docker could not allocate a pool outside existing networks and routes')
     finally:
-        docker('network', 'rm', reserve)
+        for reserve in reversed(reserved):
+            docker('network', 'rm', reserve)
 
 
 def declarations():
@@ -205,7 +221,7 @@ def main():
     gw = next((n for n in networks if n['Name'] == 'docker_gwbridge'), None)
     bridge = next(n for n in networks if n['Name'] == 'bridge')
     pools = [(n['Name'], ipaddress.ip_network(p['Subnet'])) for n in networks
-             for p in (n['IPAM'].get('Config') or []) if ':' not in p['Subnet']]
+             for p in (n['IPAM'].get('Config') or []) if ':' not in p['Subnet'] and not is_allocation(n)]
     overlaps = [(a, b) for i, (a, x) in enumerate(pools) for b, y in pools[i + 1:] if x.overlaps(y)]
     if any('bridge' not in pair for pair in overlaps):
         raise RuntimeError('Unrelated network pools overlap; preserve existing business networks')
@@ -243,7 +259,7 @@ def main():
             if (not (container['Config'].get('Labels') or {}).get('com.docker.swarm.service.id') and
                     container['HostConfig']['NetworkMode'] in ('bridge', 'default')):
                 raise RuntimeError('A container depends on the default bridge allocation')
-        candidate['bip'] = available_bridge()
+        candidate['bip'] = available_bridge(networks)
     if not active and candidate == config and (not gw or gw['EnableIPv6']):
         if not gw:
             docker('network', 'create', *network_args(None), '--ipv6', 'docker_gwbridge')
