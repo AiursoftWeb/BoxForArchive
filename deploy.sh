@@ -139,15 +139,11 @@ EOF
 }
 
 ensure_independent_swarm() {
-    local swarm_state
-    swarm_state=$(sudo docker info --format '{{.Swarm.LocalNodeState}}')
-    if [ "$swarm_state" = "inactive" ]; then
-        local advertise_address
-        advertise_address=$(ip -4 route get 1.1.1.1 | awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}')
-        [ -n "$advertise_address" ] || fail "Unable to determine the Swarm advertise address."
-        sudo docker swarm init --advertise-addr "$advertise_address"
+    if sudo test -f /var/lib/box-docker-network/pending.json || [ "$(sudo docker info --format '{{.Swarm.LocalNodeState}}')" = "inactive" ]; then
+        sudo systemd-run --wait --collect --property=Type=exec \
+            --property=SyslogIdentifier=box-docker-network \
+            python3 "$SCRIPT_DIR/ensure-docker-network.py"
     fi
-
     sudo docker node ls >/dev/null 2>&1 || fail "This node is not a Swarm manager. BoxForArchive must remain independent."
     local node_count
     node_count=$(sudo docker node ls -q | wc -l | tr -d ' ')
@@ -157,6 +153,9 @@ ensure_independent_swarm() {
     local unknown_stacks
     unknown_stacks=$(sudo docker stack ls --format '{{.Name}}' | grep -Ev "$allowed" || true)
     [ -z "$unknown_stacks" ] || fail "Unknown legacy stacks are still present: $(echo "$unknown_stacks" | tr '\n' ' ')"
+    sudo systemd-run --wait --collect --property=Type=exec \
+            --property=SyslogIdentifier=box-docker-network \
+            python3 "$SCRIPT_DIR/ensure-docker-network.py"
 }
 
 ensure_proxy_network() {
