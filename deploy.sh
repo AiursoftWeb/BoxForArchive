@@ -140,7 +140,9 @@ EOF
 
 ensure_independent_swarm() {
     if sudo test -f /var/lib/box-docker-network/pending.json || [ "$(sudo docker info --format '{{.Swarm.LocalNodeState}}')" = "inactive" ]; then
-        sudo python3 "$SCRIPT_DIR/ensure-docker-network.py"
+        sudo systemd-run --wait --collect --property=Type=exec \
+            --property=SyslogIdentifier=box-docker-network \
+            python3 "$SCRIPT_DIR/ensure-docker-network.py"
     fi
     sudo docker node ls >/dev/null 2>&1 || fail "This node is not a Swarm manager. BoxForArchive must remain independent."
     local node_count
@@ -151,7 +153,9 @@ ensure_independent_swarm() {
     local unknown_stacks
     unknown_stacks=$(sudo docker stack ls --format '{{.Name}}' | grep -Ev "$allowed" || true)
     [ -z "$unknown_stacks" ] || fail "Unknown legacy stacks are still present: $(echo "$unknown_stacks" | tr '\n' ' ')"
-    sudo python3 "$SCRIPT_DIR/ensure-docker-network.py"
+    sudo systemd-run --wait --collect --property=Type=exec \
+            --property=SyslogIdentifier=box-docker-network \
+            python3 "$SCRIPT_DIR/ensure-docker-network.py"
 }
 
 ensure_proxy_network() {
