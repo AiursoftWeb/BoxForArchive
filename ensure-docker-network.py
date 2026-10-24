@@ -56,10 +56,23 @@ def wait_for(check, message, seconds=120):
     raise RuntimeError(message)
 
 
+def control_docker(action, *units):
+    try:
+        run('systemctl', action, *units)
+    except subprocess.CalledProcessError:
+        result = run('systemctl', 'show', 'docker.service', '--property=Result', '--value')
+        if result != 'start-limit-hit':
+            raise
+        # A necessary maintenance/recovery burst can reach systemd's start limit.
+        # Retry once without changing the unit's configured rate-limit policy.
+        run('systemctl', 'reset-failed', 'docker.service', 'docker.socket')
+        run('systemctl', action, *units)
+
+
 def start_docker(transaction):
     if transaction['socket']:
-        run('systemctl', 'start', 'docker.socket')
-    run('systemctl', 'start', 'docker.service')
+        control_docker('start', 'docker.socket')
+    control_docker('start', 'docker.service')
     wait_for(lambda: bool(docker('info', '--format', '{{.ID}}')), 'Docker did not become ready')
 
 
@@ -130,12 +143,12 @@ def restore(transaction):
         current = gateway()
         if current is None or not current.get('Containers'):
             # A killed operation may have already detached the ingress sandbox.
-            run('systemctl', 'restart', 'docker.service')
+            control_docker('restart', 'docker.service')
             start_docker(transaction)
         detach_gateway()
         if transaction['gateway']:
             docker('network', 'create', *network_args(transaction['gateway']), 'docker_gwbridge')
-        run('systemctl', 'restart', 'docker.service')
+        control_docker('restart', 'docker.service')
         start_docker(transaction)
     if transaction['node']:
         docker('node', 'update', '--availability', transaction['availability'], transaction['node'])
@@ -309,7 +322,7 @@ def main():
             detach_gateway()
             docker('network', 'create', *network_args(gw), '--ipv6', 'docker_gwbridge')
             if active:
-                run('systemctl', 'restart', 'docker.service')
+                control_docker('restart', 'docker.service')
                 start_docker(transaction)
         if node:
             if docker('info', '--format', '{{.Swarm.NodeID}}') != node:
