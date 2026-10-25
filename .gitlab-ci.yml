@@ -8,7 +8,6 @@ lint-archive-box:
     - python3 -m pip install --disable-pip-version-check pyyaml
   script:
     - bash -n deploy.sh alldrop.sh stage2/images/sites/build_proxy.sh stage2/images/sites/fetch_cloudflare_ips.sh
-    - python3 -m py_compile ensure-docker-network.py
     - python3 ./lint.py
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'

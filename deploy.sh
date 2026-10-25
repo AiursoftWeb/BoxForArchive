@@ -52,7 +52,7 @@ get_env_value() {
 ensure_commands() {
     local missing=()
     local command_name
-    for command_name in docker curl python3; do
+    for command_name in docker curl jq; do
         command -v "$command_name" >/dev/null 2>&1 || missing+=("$command_name")
     done
     [ "${#missing[@]}" -eq 0 ] || fail "Missing commands: ${missing[*]}. Run ./deploy.sh --stage 0 first."
@@ -80,7 +80,7 @@ install_host_dependencies() {
     info "Installing the minimal archive host dependencies..."
     sudo apt-get update
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        ca-certificates curl docker-buildx docker-compose-v2 docker.io python3
+        ca-certificates curl docker-buildx docker-compose-v2 docker.io jq
     sudo systemctl enable --now docker
     sudo usermod -aG docker "$USER"
     ok "Host dependencies are ready."
@@ -138,12 +138,40 @@ EOF
     fi
 }
 
-ensure_independent_swarm() {
-    if sudo test -f /var/lib/box-docker-network/pending.json || [ "$(sudo docker info --format '{{.Swarm.LocalNodeState}}')" = "inactive" ]; then
-        sudo systemd-run --wait --collect --property=Type=exec \
-            --property=SyslogIdentifier=box-docker-network \
-            python3 "$SCRIPT_DIR/ensure-docker-network.py"
+configure_docker_daemon() {
+    if sudo test -f /etc/docker/daemon.json && sudo jq -e '."userland-proxy" == false' /etc/docker/daemon.json >/dev/null; then
+        return
     fi
+    [ "$(sudo docker info --format '{{.Swarm.LocalNodeState}}')" = "inactive" ] || fail "Configure userland-proxy=false during maintenance before deploying."
+    local config
+    config=$(mktemp)
+    if sudo test -f /etc/docker/daemon.json; then sudo cat /etc/docker/daemon.json; else echo '{}'; fi | jq '. + {"userland-proxy": false}' > "$config"
+    sudo dockerd --validate --config-file="$config"
+    sudo install -D -m 0644 "$config" /etc/docker/daemon.json
+    rm -f "$config"
+    sudo systemctl restart docker.service
+}
+
+function ensure_docker_network() {
+    local swarm
+    swarm=$(sudo docker info --format '{{.Swarm.LocalNodeState}} {{.Swarm.ControlAvailable}} {{.Swarm.Nodes}}')
+    [[ "$swarm" = "inactive false 0" || "$swarm" = "active true 1" ]] || { echo "Expected a new host or an independent Swarm manager." >&2; return 1; }
+    sudo test ! -f /var/lib/box-docker-network/pending.json || { echo "Finish the pending network migration before deploying." >&2; return 1; }
+    sudo jq -e '."userland-proxy" == false' /etc/docker/daemon.json >/dev/null || { echo "Configure userland-proxy=false before initializing the gateway." >&2; return 1; }
+    if sudo docker network inspect docker_gwbridge >/dev/null 2>&1; then
+        [ "$(sudo docker network inspect --format '{{.Driver}} {{.EnableIPv6}} {{index .Options "com.docker.network.bridge.name"}}' docker_gwbridge)" = "bridge true docker_gwbridge" ] || { echo "Existing Docker gateway is not dual-stack; migrate it before deploying." >&2; return 1; }
+    else
+        [ "$swarm" = "inactive false 0" ] || { echo "Active Swarm has no gateway; repair it before deploying." >&2; return 1; }
+        sudo docker network create --driver bridge --ipv6 --opt com.docker.network.bridge.name=docker_gwbridge --opt com.docker.network.bridge.enable_icc=false --opt com.docker.network.bridge.enable_ip_masquerade=true docker_gwbridge
+    fi
+    if [ "$swarm" = "inactive false 0" ]; then
+        sudo docker swarm init --advertise-addr "$(hostname -I | awk '{print $1}')"
+    fi
+}
+
+ensure_independent_swarm() {
+    configure_docker_daemon
+    ensure_docker_network
     sudo docker node ls >/dev/null 2>&1 || fail "This node is not a Swarm manager. BoxForArchive must remain independent."
     local node_count
     node_count=$(sudo docker node ls -q | wc -l | tr -d ' ')
@@ -153,9 +181,6 @@ ensure_independent_swarm() {
     local unknown_stacks
     unknown_stacks=$(sudo docker stack ls --format '{{.Name}}' | grep -Ev "$allowed" || true)
     [ -z "$unknown_stacks" ] || fail "Unknown legacy stacks are still present: $(echo "$unknown_stacks" | tr '\n' ' ')"
-    sudo systemd-run --wait --collect --property=Type=exec \
-            --property=SyslogIdentifier=box-docker-network \
-            python3 "$SCRIPT_DIR/ensure-docker-network.py"
 }
 
 ensure_proxy_network() {
