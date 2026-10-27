@@ -275,7 +275,10 @@ validate_recovered_data() {
             ;;
         peertube)
             sudo test -s /swarm-vol/peertube/config/local-production.json || fail "Missing recovered PeerTube configuration."
-            sudo test -s /swarm-vol/peertube/db/PG_VERSION || fail "Missing recovered PeerTube PostgreSQL cluster."
+            sudo test -s /swarm-vol/peertube/db17/PG_VERSION || fail "Missing restored PeerTube PostgreSQL 17 cluster."
+            local postgres_version
+            postgres_version=$(sudo cat /swarm-vol/peertube/db17/PG_VERSION)
+            [ "$postgres_version" = "17" ] || fail "PeerTube requires the restored PostgreSQL 17 cluster; found '$postgres_version'."
             sudo test -d /swarm-vol/peertube/data || fail "Missing recovered PeerTube data directory."
             ;;
     esac
