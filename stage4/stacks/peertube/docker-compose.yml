@@ -2,9 +2,8 @@ version: '3.9'
 
 services:
   peertube:
-    image: pubhub.aiursoft.com/chocobozzz/peertube:production-bookworm
+    image: pubhub.aiursoft.com/chocobozzz/peertube:v8.3.2
     volumes:
-      - assets:/app/client/dist
       - data:/data
       - config:/config
     environment:
@@ -38,13 +37,13 @@ services:
         delay: 60s
 
   postgres:
-    image: pubhub.aiursoft.com/postgres:13-alpine
+    image: pubhub.aiursoft.com/postgres:17-alpine
     environment:
       POSTGRES_USER: peertube
       POSTGRES_PASSWORD: "{{PEERTUBE_POSTGRES_PASSWORD}}"
       POSTGRES_DB: peertube
     volumes:
-      - db:/var/lib/postgresql/data
+      - db17:/var/lib/postgresql/data
     networks:
       - internal
     stop_grace_period: 60s
@@ -84,12 +83,6 @@ networks:
     external: true
 
 volumes:
-  assets:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /swarm-vol/peertube/assets
   data:
     driver: local
     driver_opts:
@@ -102,12 +95,12 @@ volumes:
       type: none
       o: bind
       device: /swarm-vol/peertube/config
-  db:
+  db17:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /swarm-vol/peertube/db
+      device: /swarm-vol/peertube/db17
   redis:
     driver: local
     driver_opts:
