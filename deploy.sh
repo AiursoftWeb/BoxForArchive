@@ -268,7 +268,7 @@ validate_recovered_data() {
     case "$stack_name" in
         download)
             sudo test -d /swarm-vol/download-data || fail "Missing /swarm-vol/download-data; refusing to create an empty download service."
-            sudo find /swarm-vol/download-data -type f -print -quit | grep -q . || fail "Download data contains no files."
+            sudo find /swarm-vol/download-data -type f -print -quit | grep . >/dev/null || fail "Download data contains no files."
             ;;
         gitea)
             sudo test -s /swarm-vol/gitea-data/gitea/gitea.db || fail "Missing recovered Gitea database."

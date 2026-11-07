@@ -7,7 +7,7 @@ if [ "${1:-}" != "--confirm" ]; then
 fi
 
 for stack in incoming download gitea peertube shepherd; do
-    if sudo docker stack ls --format '{{.Name}}' | grep -Fxq "$stack"; then
+    if sudo docker stack ls --format '{{.Name}}' | grep -Fx "$stack" >/dev/null; then
         echo "Removing stack: $stack"
         sudo docker stack rm "$stack"
     fi
