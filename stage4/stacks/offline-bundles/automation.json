@@ -1,0 +1,39 @@
+{
+  "service_url": "https://3ba1f9e23b1db2d0b52f64b307bc75d1.r2.cloudflarestorage.com",
+  "bucket": "anduinos-offline-updates",
+  "state_directory": "/data",
+  "signing": {
+    "home": "/signing",
+    "key": "8F083DFE22EEC13D5FCB525E1EBE8FD7C3DA8DF4",
+    "trusted_keyring": "/inputs/keys/bundle-signing.gpg"
+  },
+  "interval_hours": 48,
+  "retry_minutes": 60,
+  "jobs": [
+    {
+      "id": "resolute-2-0-amd64",
+      "profile": "/app/profiles/resolute-amd64.json",
+      "inputs": "/inputs",
+      "summary": "Cumulative AnduinOS system and security updates."
+    },
+    {
+      "id": "resolute-2-0-arm64",
+      "profile": "/app/profiles/resolute-arm64.json",
+      "inputs": "/inputs",
+      "summary": "Cumulative AnduinOS system and security updates."
+    },
+    {
+      "id": "stonking-2-1-amd64",
+      "profile": "/app/profiles/stonking-amd64.json",
+      "inputs": "/inputs",
+      "summary": "Cumulative AnduinOS system and security updates."
+    },
+    {
+      "id": "stonking-2-1-arm64",
+      "profile": "/app/profiles/stonking-arm64.json",
+      "inputs": "/inputs",
+      "summary": "Cumulative AnduinOS system and security updates."
+    }
+  ],
+  "trusted_keyring_sha256": "4aee607db52c652290045b0b77c30d62adecff7bf3f6d801a66d38f9db5693df"
+}

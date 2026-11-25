@@ -177,7 +177,7 @@ ensure_independent_swarm() {
     node_count=$(sudo docker node ls -q | wc -l | tr -d ' ')
     [ "$node_count" = "1" ] || fail "This Swarm contains $node_count nodes. BoxForArchive requires exactly one node."
 
-    local allowed='^(incoming|download|gitea|peertube|shepherd)$'
+    local allowed='^(incoming|download|gitea|peertube|shepherd|offline-bundles)$'
     local unknown_stacks
     unknown_stacks=$(sudo docker stack ls --format '{{.Name}}' | grep -Ev "$allowed" || true)
     [ -z "$unknown_stacks" ] || fail "Unknown legacy stacks are still present: $(echo "$unknown_stacks" | tr '\n' ' ')"
