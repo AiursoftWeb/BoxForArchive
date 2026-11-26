@@ -6,11 +6,12 @@
 
 ### What is BoxForArchive?
 
-`BoxForArchive` is the storage-heavy, low-cost archive node for three global services:
+`BoxForArchive` is the storage-heavy, low-cost archive node for four global services:
 
 - `download.anduinos.com`
 - `git.aiursoft.com`
 - `videos.aiursoft.com`
+- AnduinOS offline update packaging and publication to the dedicated R2 bucket (no website on this node for it)
 
 It is intentionally an independent, single-node Docker Swarm. It does not join the
 Emergency Swarm and does not run a local registry, Puller, Zot, ClickHouse, Grafana,
@@ -75,6 +76,9 @@ Stage 2 contains `incoming` (Caddy). Stage 4 contains `download`, `gitea`, `peer
 
 # Deploy only the image updater.
 ./deploy.sh --stage 4 --filter shepherd
+
+# Deploy the offline update publisher.
+./deploy.sh --stage 4 --filter offline-bundles
 ```
 
 The HTTPS hostnames should be moved to this node only after the corresponding
@@ -99,7 +103,7 @@ Keep `gitea-ssh.aiursoft.com` DNS-only; Gitea advertises clone URLs in the form
 - The script fails if unknown legacy stacks remain in the Swarm.
 - No local registry or insecure registry is configured.
 - No automatic Docker volume or system prune is installed.
-- `alldrop.sh` removes only this Box's five known stacks and requires an explicit
+- `alldrop.sh` removes only this Box's six known stacks and requires an explicit
   `--confirm` argument.
 
 **Check the result.** On the target Swarm manager, inspect the selected stack and its tasks:
@@ -152,8 +156,8 @@ $EDITOR .env.prod
 ```
 
 `stage0` installs Docker and initializes an independent single-node Swarm.
-`stage2` builds and deploys Caddy. `stage4` deploys the three archive services and
-Shepherd. Stages 1 and 3 intentionally do not exist.
+`stage2` builds and deploys Caddy. `stage4` deploys the three archive services, the
+offline update publisher, and Shepherd. Stages 1 and 3 intentionally do not exist.
 
 ## How to contribute
 

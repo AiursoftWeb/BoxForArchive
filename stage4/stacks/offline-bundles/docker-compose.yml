@@ -1,0 +1,58 @@
+version: '3.9'
+
+services:
+  publisher:
+    image: pubhub.aiursoft.com/aiursoft/anduinosofflinebundles:latest
+    user: "10001:10001"
+    environment:
+      ANDUINOS_R2_ACCESS_KEY: "{{OFFLINE_BUNDLES_R2_ACCESS_KEY}}"
+      ANDUINOS_R2_SECRET_KEY: "{{OFFLINE_BUNDLES_R2_SECRET_KEY}}"
+      TZ: UTC
+    volumes:
+      - offline-runtime-config:/config:ro
+      - offline-data:/data
+      - offline-signing:/signing
+      - offline-inputs:/inputs:ro
+    stop_grace_period: 120s
+    deploy:
+      replicas: 1
+      labels:
+        shepherd.autoupdate: "true"
+      restart_policy:
+        condition: any
+        delay: 60s
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+      update_config:
+        order: stop-first
+        delay: 60s
+      rollback_config:
+        order: stop-first
+
+volumes:
+  offline-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /swarm-vol/anduinos-offline-bundles/data
+  offline-signing:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /swarm-vol/anduinos-offline-bundles/signing
+  offline-inputs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /swarm-vol/anduinos-offline-bundles/inputs
+  offline-runtime-config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /swarm-vol/anduinos-offline-bundles/config

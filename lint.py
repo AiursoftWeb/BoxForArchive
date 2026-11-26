@@ -7,7 +7,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parent
-EXPECTED_STACKS = {"download", "gitea", "peertube", "shepherd"}
+EXPECTED_STACKS = {"download", "gitea", "peertube", "shepherd", "offline-bundles"}
 FORBIDDEN_WORDS = {
     "localhost:8080",
     "pysyncer",
