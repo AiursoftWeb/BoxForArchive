@@ -2,10 +2,14 @@
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
+# The shared stage layout is maintained against BoxForGlobal/deploy.sh.
 TARGET_STAGE=0
 STACK_FILTER=
 # Allow an early starting stage to run infrastructure with an intentionally unmatched filter.
 ALLOW_INFRA_ONLY=0
+
+# Preserve the order of business stacks on existing installations.
+SORT_STACK_NAMES=1
 
 print_info() { printf '\033[36m[ INFO ]\033[0m %s\n' "$*"; }
 print_ok() { printf '\033[32m[  OK  ]\033[0m %s\n' "$*"; }
@@ -34,9 +38,13 @@ while (( $# )); do
 done
 
 STAGE4_STACKS=()
-for compose_file in stage4/stacks/*/docker-compose.yml; do
-    [[ -f "$compose_file" ]] || continue
-    stack_dir=${compose_file%/*}
+if (( SORT_STACK_NAMES )); then
+    stack_dirs=(stage4/stacks/*)
+else
+    mapfile -d '' -t stack_dirs < <(find stage4/stacks -mindepth 1 -maxdepth 1 -type d -print0)
+fi
+for stack_dir in "${stack_dirs[@]}"; do
+    [[ -f "$stack_dir/docker-compose.yml" ]] || continue
     stack_name=${stack_dir##*/}
     if [[ "$stack_name" == *"$STACK_FILTER"* ]]; then
         STAGE4_STACKS+=("$stack_name")
