@@ -4,7 +4,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 TARGET_STAGE=0
 STACK_FILTER=
-# The full sites also use an unmatched stage-4 filter for infrastructure-only runs.
+# Allow an early starting stage to run infrastructure with an intentionally unmatched filter.
 ALLOW_INFRA_ONLY=0
 
 print_info() { printf '\033[36m[ INFO ]\033[0m %s\n' "$*"; }
@@ -49,23 +49,72 @@ if (( ${#STAGE4_STACKS[@]} == 0 )); then
     print_info "No stage-4 stack matched '$STACK_FILTER'; running infrastructure and shared preparation only."
 fi
 
+DOCKER=(sudo docker)
+STACK_OPTIONS=(--prune --with-registry-auth)
 REGISTRY_LOGGED_IN=0
 
-if [ -f .env.prod ]; then
+ENV_FILE=
+if [[ -f .env.prod ]]; then
     ENV_FILE=.env.prod
-elif [ -f .env ]; then
+elif [[ -f .env ]]; then
     ENV_FILE=.env
-else
-    echo "Missing .env.prod. Copy .env.example and fill in the required values." >&2
-    exit 1
 fi
+[[ -n "$ENV_FILE" ]] || fail "Missing .env.prod. Copy .env.example and fill in the required values."
 
 get_env_value() {
-    local key=$1
-    local line
+    local key=$1 line
+    [[ -n "$ENV_FILE" ]] || fail "No environment file found for $key."
     line=$(grep -m1 -E "^${key}=" "$ENV_FILE" || true)
-    [ -n "$line" ] && [ -n "${line#*=}" ] || fail "'$key' is missing or empty in $ENV_FILE."
+    [[ -n "$line" && -n "${line#*=}" ]] || fail "'$key' is missing or empty in $ENV_FILE."
     printf '%s' "${line#*=}"
+}
+
+render_compose() {
+    local template=$1 line key value
+    if [[ -z "$ENV_FILE" ]]; then
+        cat -- "$template"
+        return
+    fi
+    # Feed sed the replacements on stdin so credentials stay out of process arguments.
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" == *=* && "$line" != \#* ]] || continue
+        key=${line%%=*}
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        value=${line#*=}
+        value=${value//\\/\\\\}
+        value=${value//&/\\&}
+        value=${value//\//\\/}
+        printf 's/{{%s}}/%s/g\n' "$key" "$value"
+    done < "$ENV_FILE" | sed -f - "$template" |
+        sed '/{{[A-Z0-9_][A-Z0-9_]*}}/Q1' || {
+            print_error "Could not render $template. Check for unresolved Compose variables."
+            return 1
+        }
+}
+
+deploy_stack() {
+    local template=$1 stack_name=$2 resolve=$3 compose
+    shift 3
+    # Render completely before Docker sees the stack. The marker preserves trailing YAML newlines.
+    compose=$(render_compose "$template" "$@" && printf '.') || return 1
+    print_info "Deploying stack '$stack_name'."
+    printf '%s' "${compose%.}" |
+        "${DOCKER[@]}" stack deploy --compose-file - --detach "${STACK_OPTIONS[@]}" --resolve-image "$resolve" "$stack_name"
+}
+
+ensure_overlay_network() {
+    local name=$1
+    shift
+    if ! "${DOCKER[@]}" network inspect "$name" >/dev/null 2>&1; then
+        print_info "Creating overlay network '$name'."
+        "${DOCKER[@]}" network create --driver overlay --attachable --scope swarm "$@" "$name" >/dev/null
+    fi
+}
+
+verify_overlay_network() {
+    local name=$1
+    [[ $("${DOCKER[@]}" network inspect --format '{{.Driver}} {{.Scope}}' "$name") == 'overlay swarm' ]] ||
+        fail "The $name network must be a Swarm overlay."
 }
 
 ensure_commands() {
@@ -202,23 +251,6 @@ ensure_independent_swarm() {
     [ -z "$unknown_stacks" ] || fail "Unknown legacy stacks are still present: $(echo "$unknown_stacks" | tr '\n' ' ')"
 }
 
-ensure_proxy_network() {
-    if ! sudo docker network inspect proxy_app >/dev/null 2>&1; then
-        print_info "Creating the archive proxy overlay network..."
-        sudo docker network create \
-            --driver overlay \
-            --attachable \
-            --subnet 10.233.0.0/16 \
-            --opt com.docker.network.driver.mtu=1400 \
-            --scope swarm \
-            proxy_app >/dev/null
-    else
-        local network_type
-        network_type=$(sudo docker network inspect --format '{{.Driver}} {{.Scope}}' proxy_app)
-        [ "$network_type" = "overlay swarm" ] || fail "Existing proxy_app network is '$network_type', expected 'overlay swarm'."
-    fi
-}
-
 ensure_caddy_data_directory() {
     sudo mkdir -p /swarm-vol/sites-data
 }
@@ -237,49 +269,6 @@ login_to_registry() {
     sudo docker manifest inspect "$host/$verification_image" >/dev/null
     REGISTRY_LOGGED_IN=1
     print_ok "PubHub access verified with $verification_image."
-}
-
-render_compose() {
-    local source_file=$1
-    local output_file=$2
-    cp "$source_file" "$output_file"
-    chmod 600 "$output_file"
-
-    while IFS='=' read -r key value; do
-        [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
-        local escaped_value
-        escaped_value=$(printf '%s' "$value" | sed -e 's/[\/&]/\\&/g')
-        sed -i "s/{{$key}}/$escaped_value/g" "$output_file"
-    done < "$ENV_FILE"
-
-    if grep -Eq '{{[A-Z0-9_]+}}' "$output_file"; then
-        local unresolved
-        unresolved=$(grep -Eo '{{[A-Z0-9_]+}}' "$output_file" | sort -u | tr '\n' ' ')
-        rm -f "$output_file"
-        fail "Unresolved compose variables: $unresolved"
-    fi
-}
-
-deploy_stack() {
-    local compose_file=$1
-    local stack_name=$2
-    local resolve_mode=${3:-always}
-    local rendered
-    rendered=$(mktemp)
-    render_compose "$compose_file" "$rendered"
-
-    print_info "Deploying stack '$stack_name'..."
-    if ! sudo docker stack deploy \
-        --compose-file "$rendered" \
-        --detach \
-        --prune \
-        --with-registry-auth \
-        --resolve-image "$resolve_mode" \
-        "$stack_name"; then
-        rm -f "$rendered"
-        fail "Failed to deploy stack '$stack_name'."
-    fi
-    rm -f "$rendered"
 }
 
 validate_recovered_data() {
@@ -303,7 +292,21 @@ validate_recovered_data() {
     esac
 }
 
-build_and_deploy_caddy() {
+stage0() {
+    install_host_dependencies
+    setup_docker_auto_clean
+}
+
+prepare_deployment() {
+    ensure_commands
+    ensure_independent_swarm
+    ensure_overlay_network proxy_app --subnet 10.233.0.0/16 --opt com.docker.network.driver.mtu=1400
+    verify_overlay_network proxy_app
+    ensure_caddy_data_directory
+}
+
+stage2() {
+    login_to_registry
     local image_dir=stage2/images/sites
     rm -rf "$image_dir/discovered" "$image_dir/Dist"
     mkdir -p "$image_dir/discovered"
@@ -322,11 +325,17 @@ build_and_deploy_caddy() {
     sudo docker service update --force --no-resolve-image incoming_sites
 }
 
-deploy_business_stacks() {
+prepare_business_stacks() {
     local stack_name
+    login_to_registry
     for stack_name in "${STAGE4_STACKS[@]}"; do
         validate_recovered_data "$stack_name"
     done
+}
+
+stage4() {
+    local stack_name
+    prepare_business_stacks
     for stack_name in "${STAGE4_STACKS[@]}"; do
         deploy_stack "stage4/stacks/$stack_name/docker-compose.yml" "$stack_name" always
     done
@@ -334,34 +343,18 @@ deploy_business_stacks() {
 
 configure_docker_storage_dependency
 
-if [ "$TARGET_STAGE" -le 0 ]; then
-    install_host_dependencies
-    setup_docker_auto_clean
+if (( TARGET_STAGE <= 0 )); then
+    print_info "Stage 0: prepare the host and Swarm."
+    stage0
 fi
 
-ensure_commands
-ensure_independent_swarm
-ensure_proxy_network
-ensure_caddy_data_directory
+prepare_deployment
 
-if [ "$TARGET_STAGE" -le 1 ]; then
-    print_info "Stage 1 intentionally has no local image mirror. PubHub is used directly."
+if (( TARGET_STAGE <= 2 )); then
+    print_info "Stage 2: deploy the incoming proxy."
+    stage2
 fi
 
-if [ "$TARGET_STAGE" -le 2 ]; then
-    login_to_registry
-    build_and_deploy_caddy
-    print_ok "Stage 2 complete: archive Caddy is deployed without HTTP access logging."
-fi
-
-if [ "$TARGET_STAGE" -le 3 ]; then
-    print_info "Stage 3 intentionally has no Registry, Puller, ClickHouse, or authentication stack."
-fi
-
-if [ "$TARGET_STAGE" -le 4 ]; then
-    login_to_registry
-    deploy_business_stacks
-    print_ok "Stage 4 complete: selected archive stacks were deployed."
-fi
-
-sudo docker stack ls
+print_info "Stage 4: deploy business stacks."
+stage4
+"${DOCKER[@]}" stack ls

@@ -81,6 +81,8 @@ Stage 2 contains `incoming` (Caddy). Stage 4 contains `download`, `gitea`, `peer
 ./deploy.sh --stage 4 --filter offline-bundles
 ```
 
+`--filter` matches a literal substring of stage-4 stack names. A request with no matching stack fails before host preparation.
+
 The HTTPS hostnames should be moved to this node only after the corresponding
 service reports healthy. Gitea's separate SSH endpoint is not handled by Caddy.
 
@@ -118,7 +120,7 @@ Replace `shepherd` with the stack being inspected. Confirm the desired replicas,
 
 ## Configuration
 
-`deploy.sh` reads `.env.prod` first and falls back to `.env`; it does not merge the two files. Keep real credentials in the private deployment environment. Values replace matching `{{VARIABLE_NAME}}` placeholders in temporary Compose copies; tracked Compose sources remain unchanged.
+`deploy.sh` reads `.env.prod` first and falls back to `.env`; it does not merge the two files. Keep real credentials in the private deployment environment. Values replace matching `{{VARIABLE_NAME}}` placeholders in memory before Docker receives the stack over standard input.
 
 Prepare the private file from the tracked [.env.example](.env.example) reference and fill in the values required by the selected services:
 
