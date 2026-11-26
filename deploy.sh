@@ -1,31 +1,55 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
-
-STACK_FILTER=""
 TARGET_STAGE=0
-REGISTRY_LOGGED_IN=0
+STACK_FILTER=
+# The full sites also use an unmatched stage-4 filter for infrastructure-only runs.
+ALLOW_INFRA_ONLY=0
 
-while [[ $# -gt 0 ]]; do
+print_info() { printf '\033[36m[ INFO ]\033[0m %s\n' "$*"; }
+print_ok() { printf '\033[32m[  OK  ]\033[0m %s\n' "$*"; }
+print_warn() { printf '\033[33m[ WARN ]\033[0m %s\n' "$*"; }
+print_error() { printf '\033[31m[FAILED]\033[0m %s\n' "$*" >&2; }
+fail() { print_error "$@"; exit 1; }
+
+while (( $# )); do
     case "$1" in
-        --filter)
-            [ -n "${2:-}" ] || { echo "--filter requires a value" >&2; exit 1; }
-            STACK_FILTER="$2"
-            shift 2
-            ;;
         --stage)
-            [[ "${2:-}" =~ ^[0-4]$ ]] || { echo "--stage requires an integer from 0 to 4" >&2; exit 1; }
-            TARGET_STAGE="$2"
+            [[ "${2:-}" =~ ^[0-4]$ ]] || fail '--stage requires an integer from 0 to 4.'
+            TARGET_STAGE=$2
             shift 2
             ;;
-        *)
-            echo "Unknown argument: $1" >&2
-            exit 1
+        --filter)
+            [[ -n "${2:-}" && $2 != --* ]] || fail '--filter requires a stack-name substring.'
+            STACK_FILTER=$2
+            shift 2
             ;;
+        -h|--help)
+            printf '%s\n' 'Usage: deploy.sh [--stage 0..4] [--filter <stage-4 stack name substring>]'
+            exit 0
+            ;;
+        *) fail "Unknown option: $1" ;;
     esac
 done
+
+STAGE4_STACKS=()
+for compose_file in stage4/stacks/*/docker-compose.yml; do
+    [[ -f "$compose_file" ]] || continue
+    stack_dir=${compose_file%/*}
+    stack_name=${stack_dir##*/}
+    if [[ "$stack_name" == *"$STACK_FILTER"* ]]; then
+        STAGE4_STACKS+=("$stack_name")
+    fi
+done
+if (( ${#STAGE4_STACKS[@]} == 0 )); then
+    if [[ -z "$STACK_FILTER" ]] || (( TARGET_STAGE == 4 || ! ALLOW_INFRA_ONLY )); then
+        fail "No stage-4 stack matched the filter '$STACK_FILTER'."
+    fi
+    print_info "No stage-4 stack matched '$STACK_FILTER'; running infrastructure and shared preparation only."
+fi
+
+REGISTRY_LOGGED_IN=0
 
 if [ -f .env.prod ]; then
     ENV_FILE=.env.prod
@@ -35,11 +59,6 @@ else
     echo "Missing .env.prod. Copy .env.example and fill in the required values." >&2
     exit 1
 fi
-
-info() { printf '\033[36m[ INFO ]\033[0m %s\n' "$*"; }
-ok() { printf '\033[32m[  OK  ]\033[0m %s\n' "$*"; }
-warn() { printf '\033[33m[ WARN ]\033[0m %s\n' "$*"; }
-fail() { printf '\033[31m[FAILED]\033[0m %s\n' "$*" >&2; exit 1; }
 
 get_env_value() {
     local key=$1
@@ -77,13 +96,13 @@ EOF
 }
 
 install_host_dependencies() {
-    info "Installing the minimal archive host dependencies..."
+    print_info "Installing the minimal archive host dependencies..."
     sudo apt-get update
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
         ca-certificates curl docker-buildx docker-compose-v2 docker.io jq
     sudo systemctl enable --now docker
     sudo usermod -aG docker "$USER"
-    ok "Host dependencies are ready."
+    print_ok "Host dependencies are ready."
 }
 
 function setup_docker_auto_clean() {
@@ -185,7 +204,7 @@ ensure_independent_swarm() {
 
 ensure_proxy_network() {
     if ! sudo docker network inspect proxy_app >/dev/null 2>&1; then
-        info "Creating the archive proxy overlay network..."
+        print_info "Creating the archive proxy overlay network..."
         sudo docker network create \
             --driver overlay \
             --attachable \
@@ -212,12 +231,12 @@ login_to_registry() {
     password=$(get_env_value REGISTRY_PASSWORD)
     verification_image=$(get_env_value REGISTRY_VERIFICATION_IMAGE)
 
-    info "Logging in to $host..."
+    print_info "Logging in to $host..."
     printf '%s' "$password" | sudo docker login "$host" --username "$username" --password-stdin
     unset password
     sudo docker manifest inspect "$host/$verification_image" >/dev/null
     REGISTRY_LOGGED_IN=1
-    ok "PubHub access verified with $verification_image."
+    print_ok "PubHub access verified with $verification_image."
 }
 
 render_compose() {
@@ -249,7 +268,7 @@ deploy_stack() {
     rendered=$(mktemp)
     render_compose "$compose_file" "$rendered"
 
-    info "Deploying stack '$stack_name'..."
+    print_info "Deploying stack '$stack_name'..."
     if ! sudo docker stack deploy \
         --compose-file "$rendered" \
         --detach \
@@ -295,7 +314,7 @@ build_and_deploy_caddy() {
         ./build_proxy.sh
     )
 
-    info "Building the local archive Caddy image from PubHub base images..."
+    print_info "Building the local archive Caddy image from PubHub base images..."
     sudo docker build --pull --tag boxforarchive/archive-caddy:latest "$image_dir"
     deploy_stack stage2/stacks/incoming/docker-compose.yml incoming never
 
@@ -304,28 +323,12 @@ build_and_deploy_caddy() {
 }
 
 deploy_business_stacks() {
-    local selected=()
-    local compose_file stack_name
-    while IFS= read -r -d '' compose_file; do
-        stack_name=$(basename "$(dirname "$compose_file")")
-        if [ -z "$STACK_FILTER" ] || [[ "$stack_name" == *"$STACK_FILTER"* ]]; then
-            selected+=("$stack_name:$compose_file")
-        else
-            info "Skipping stack '$stack_name' due to filter."
-        fi
-    done < <(find stage4/stacks -name docker-compose.yml -type f -print0 | sort -z)
-
-    [ "${#selected[@]}" -gt 0 ] || fail "No stage4 stack matched filter '$STACK_FILTER'."
-
-    local item
-    for item in "${selected[@]}"; do
-        stack_name=${item%%:*}
+    local stack_name
+    for stack_name in "${STAGE4_STACKS[@]}"; do
         validate_recovered_data "$stack_name"
     done
-    for item in "${selected[@]}"; do
-        stack_name=${item%%:*}
-        compose_file=${item#*:}
-        deploy_stack "$compose_file" "$stack_name" always
+    for stack_name in "${STAGE4_STACKS[@]}"; do
+        deploy_stack "stage4/stacks/$stack_name/docker-compose.yml" "$stack_name" always
     done
 }
 
@@ -342,23 +345,23 @@ ensure_proxy_network
 ensure_caddy_data_directory
 
 if [ "$TARGET_STAGE" -le 1 ]; then
-    info "Stage 1 intentionally has no local image mirror. PubHub is used directly."
+    print_info "Stage 1 intentionally has no local image mirror. PubHub is used directly."
 fi
 
 if [ "$TARGET_STAGE" -le 2 ]; then
     login_to_registry
     build_and_deploy_caddy
-    ok "Stage 2 complete: archive Caddy is deployed without HTTP access logging."
+    print_ok "Stage 2 complete: archive Caddy is deployed without HTTP access logging."
 fi
 
 if [ "$TARGET_STAGE" -le 3 ]; then
-    info "Stage 3 intentionally has no Registry, Puller, ClickHouse, or authentication stack."
+    print_info "Stage 3 intentionally has no Registry, Puller, ClickHouse, or authentication stack."
 fi
 
 if [ "$TARGET_STAGE" -le 4 ]; then
     login_to_registry
     deploy_business_stacks
-    ok "Stage 4 complete: selected archive stacks were deployed."
+    print_ok "Stage 4 complete: selected archive stacks were deployed."
 fi
 
 sudo docker stack ls
